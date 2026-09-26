@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.git/
+.gitignore
+data/
+logs/
+ui-ux-pro-max-skill/
+design-system/
+docs/images/
+*.md
+!README.md
+.env

@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Performance benchmark
+        run: pytest tests/performance -q
+
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: docxy:ci
+
+      - name: Boot the container and check readiness
+        run: |
+          docker run -d --name docxy-ci -p 8000:8000 docxy:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/health/ready > /dev/null; then
+              echo "service became ready"
+              curl -s http://127.0.0.1:8000/health/ready
+              docker rm -f docxy-ci
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "service never became ready"
+          docker logs docxy-ci
+          docker rm -f docxy-ci
+          exit 1

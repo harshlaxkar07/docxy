@@ -1,0 +1,36 @@
+services:
+  docxy:
+    build: .
+    image: docxy:latest
+    container_name: docxy
+    ports:
+      - "8000:8000"
+    environment:
+      APP_ENV: production
+      # Extraction concurrency. SQLite + one process, so scale here rather
+      # than by adding replicas.
+      WORKER_COUNT: "2"
+      # Uncomment to require an API key on every document/job route:
+      # AUTH_ENABLED: "true"
+      # API_KEYS: "change-me"
+      # CORS_ALLOW_ORIGINS: "https://your-frontend.example.com"
+      # Vision OCR for scanned pages:
+      # GROQ_ENABLED: "true"
+      # GROQ_API_KEY: "${GROQ_API_KEY}"
+    volumes:
+      # Database, stored PDFs, extracted text and logs all live here.
+      - docxy-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  docxy-data:
