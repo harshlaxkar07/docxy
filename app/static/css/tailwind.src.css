@@ -1,0 +1,5 @@
+/* Input for the Tailwind build — see tailwind.config.js for the command.
+   Preflight is off: docxy.css already sets its own base layer, and Tailwind's
+   reset would fight it (notably on headings, lists and form controls). */
+@tailwind components;
+@tailwind utilities;

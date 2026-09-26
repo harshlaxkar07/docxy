@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>docxy — PDF extraction &amp; OCR</title>
+<meta name="description" content="Upload a PDF, watch every page get classified, and read the extracted text. Native text is read directly; only scanned pages reach the OCR model.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+
+<link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/css/fonts.css">
+<link rel="stylesheet" href="/css/tailwind.css">
+<link rel="stylesheet" href="/css/docxy.css">
+
+<!-- Theme is resolved before first paint so the page never flashes the wrong mode. -->
+<script>
+  (function () {
+    try {
+      var saved = localStorage.getItem("docxy-theme");
+      var dark = saved ? saved === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+      if (dark) document.documentElement.classList.add("dark");
+    } catch (e) { /* private mode — fall back to light */ }
+  })();
+</script>
+
+</head>
+
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="masthead">
+  <div class="shell flex items-center justify-between gap-4 h-16">
+    <a href="#/" class="wordmark" aria-label="docxy home">docxy</a>
+
+    <nav class="hidden md:flex items-center gap-7" aria-label="Primary">
+      <a class="nav-link" href="#/" data-nav="workspace">Workspace</a>
+      <a class="nav-link" href="#/documents" data-nav="documents">Documents</a>
+      <a class="nav-link" href="#/service" data-nav="service">Service</a>
+    </nav>
+
+    <div class="flex items-center gap-2">
+      <span id="service-pill" class="badge badge-idle" title="Service readiness">
+        <span class="badge-dot" aria-hidden="true"></span>checking
+      </span>
+      <button id="theme-toggle" class="icon-btn" type="button" aria-pressed="false">
+        <span class="sr-only">Toggle dark mode</span>
+        <span id="theme-icon" aria-hidden="true"></span>
+      </button>
+    </div>
+  </div>
+
+  <nav class="md:hidden shell flex items-center gap-6 h-11 border-t border-line" aria-label="Primary mobile">
+    <a class="nav-link" href="#/" data-nav="workspace">Workspace</a>
+    <a class="nav-link" href="#/documents" data-nav="documents">Documents</a>
+    <a class="nav-link" href="#/service" data-nav="service">Service</a>
+  </nav>
+</header>
+
+<main id="main" class="shell pb-24">
+
+  <!-- ===================== WORKSPACE ===================== -->
+  <section id="view-workspace" hidden>
+
+    <!-- 01 — Ingest: asymmetric split. The upload target is the main visual
+         and the primary action at once; the right column is live service state. -->
+    <div class="grid lg:grid-cols-[1.5fr_1fr] gap-8 lg:gap-14 pt-10 lg:pt-16">
+      <div>
+        <p class="section-index">01 / INGEST</p>
+        <h1 class="mt-3" style="font-size: clamp(1.75rem, 4vw, 2.75rem)">
+          Native text first.<br>OCR only where it&rsquo;s needed.
+        </h1>
+        <p class="mt-4 max-w-prose text-[0.9375rem]" style="color: var(--muted-fg)">
+          Every page is classified before anything is extracted. Typed pages are read
+          straight out of the PDF; only genuinely scanned pages are sent to the vision
+          model &mdash; so a mixed document costs a handful of OCR calls instead of one per page.
+        </p>
+
+        <label class="drop mt-8" id="drop">
+          <input id="file" class="sr-only" type="file" accept="application/pdf,.pdf">
+          <span class="drop-glyph" id="drop-glyph" aria-hidden="true"></span>
+          <span class="block">
+            <span class="block font-semibold text-[1.0625rem]" id="drop-title">Drop a PDF here, or browse</span>
+            <span class="block mt-1 text-[0.8125rem]" id="drop-sub" style="color: var(--muted-fg)">
+              Reading service limits&hellip;
+            </span>
+          </span>
+          <span class="meter w-full max-w-sm" id="upload-meter" hidden><span style="width:0%"></span></span>
+        </label>
+
+        <p id="upload-status" class="mt-3 text-[0.8125rem]" style="color: var(--muted-fg)" aria-live="polite"></p>
+      </div>
+
+      <aside class="lg:pt-10">
+        <div class="flex items-baseline justify-between">
+          <p class="label">Pipeline state</p>
+          <button id="refresh-health" class="btn-sm" type="button"
+                  style="background:none;border:0;cursor:pointer;color:var(--accent-text);font-weight:600;font-size:.75rem">
+            Refresh
+          </button>
+        </div>
+        <div class="panel panel-pad mt-3" id="health-panel">
+          <div class="grid gap-3">
+            <div class="skeleton" style="height:1rem"></div>
+            <div class="skeleton" style="height:1rem"></div>
+            <div class="skeleton" style="height:1rem"></div>
+          </div>
+        </div>
+
+        <p class="label mt-8">Accepted input</p>
+        <dl class="kv panel panel-pad mt-3" id="limits-panel">
+          <div><dt>Loading</dt><dd>&hellip;</dd></div>
+        </dl>
+      </aside>
+    </div>
+
+    <!-- 02 — In flight: only rendered while the worker actually has work. -->
+    <div id="inflight" class="mt-16 lg:mt-24" hidden>
+      <div class="flex items-baseline justify-between gap-4">
+        <div>
+          <p class="section-index" id="inflight-index">02 / IN FLIGHT</p>
+          <h2 class="mt-2 text-xl">Being processed</h2>
+        </div>
+        <p class="label" id="inflight-count"></p>
+      </div>
+      <div class="mt-6 grid gap-5 stagger" id="inflight-list"></div>
+    </div>
+
+    <!-- 03 — Ledger: dense editorial table, deliberately not a card grid. -->
+    <div class="mt-16 lg:mt-24">
+      <div class="flex items-baseline justify-between gap-4">
+        <div>
+          <p class="section-index" id="ledger-index">02 / LEDGER</p>
+          <h2 class="mt-2 text-xl">Recent documents</h2>
+        </div>
+        <a class="nav-link" href="#/documents">All documents &rarr;</a>
+      </div>
+      <div class="mt-6 overflow-x-auto" id="recent-wrap"></div>
+    </div>
+  </section>
+
+  <!-- ===================== DOCUMENTS ===================== -->
+  <section id="view-documents" hidden>
+    <div class="pt-10 lg:pt-14">
+      <p class="section-index">LEDGER</p>
+      <h1 class="mt-3 text-3xl">Documents</h1>
+      <p class="mt-3 max-w-prose text-[0.9375rem]" style="color: var(--muted-fg)">
+        Every document the service has ingested, newest first, with the state of its latest job.
+      </p>
+
+      <div class="mt-7 flex flex-wrap items-center gap-2" role="group" aria-label="Filter by status">
+        <button class="btn btn-ghost btn-sm" data-filter="" type="button">All</button>
+        <button class="btn btn-ghost btn-sm" data-filter="PROCESSING" type="button">Processing</button>
+        <button class="btn btn-ghost btn-sm" data-filter="COMPLETED" type="button">Completed</button>
+        <button class="btn btn-ghost btn-sm" data-filter="FAILED" type="button">Failed</button>
+        <button class="btn btn-ghost btn-sm" data-filter="UPLOADED" type="button">Uploaded</button>
+      </div>
+
+      <div class="mt-6 overflow-x-auto" id="ledger-wrap"></div>
+
+      <div class="mt-6 flex items-center justify-between gap-4">
+        <p class="label" id="ledger-range"></p>
+        <div class="flex gap-2">
+          <button id="page-prev" class="btn btn-ghost btn-sm" type="button">Previous</button>
+          <button id="page-next" class="btn btn-ghost btn-sm" type="button">Next</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== DOCUMENT DETAIL ===================== -->
+  <section id="view-document" hidden>
+    <div class="pt-10 lg:pt-14" id="document-body"></div>
+  </section>
+
+  <!-- ===================== SERVICE ===================== -->
+  <section id="view-service" hidden>
+    <div class="pt-10 lg:pt-14">
+      <p class="section-index">CONFIGURATION</p>
+      <h1 class="mt-3 text-3xl">Service</h1>
+      <p class="mt-3 max-w-prose text-[0.9375rem]" style="color: var(--muted-fg)">
+        The effective, non-sensitive configuration this process is running with, read live from
+        <code class="mono">/api/v1/settings</code> and <code class="mono">/health/ready</code>.
+      </p>
+      <div class="mt-8 grid gap-6 lg:grid-cols-2 items-start" id="service-body"></div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="border-t border-line">
+  <div class="shell py-8 flex flex-wrap items-center justify-between gap-4 text-[0.8125rem]"
+       style="color: var(--muted-fg)">
+    <p>docxy &mdash; per-page PDF extraction with native-first OCR fallback.</p>
+    <nav class="flex flex-wrap gap-5" aria-label="Service links">
+      <a class="hover:underline" href="/docs">OpenAPI docs</a>
+      <a class="hover:underline" href="/health/ready">Readiness</a>
+      <a class="hover:underline" href="/api/v1/settings">Settings JSON</a>
+    </nav>
+  </div>
+</footer>
+
+<div id="toasts" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
+
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>

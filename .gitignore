@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+.env
+.venv
+ENV/
+
+# Data & Logs
+data/temp/*
+!data/temp/.gitkeep
+data/output/*
+!data/output/.gitkeep
+data/*.db
+data/*.db-shm
+data/*.db-wal
+logs/*.log
+!logs/.gitkeep
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+/openspec
+.agent
+
+# Generated test artifacts (regenerated on every test run, like data/output)
+data/test_output/
+data/test_temp/
+
+# Vendored third-party tool, cloned in for local use — not part of docxy.
+# Upstream: https://github.com/nextlevelbuilder/ui-ux-pro-max-skill
+ui-ux-pro-max-skill/
