@@ -11,7 +11,12 @@ def test_classify_native_page(sample_native_pdf_bytes):
 
     assert analysis.page_type == PageType.NATIVE_TEXT
     assert analysis.character_count > 100
-    assert analysis.has_text if hasattr(analysis, "has_text") else analysis.character_count > 0
+    # A native page must carry real text, register density, and hold no imagery.
+    # (The previous assertion here tested `character_count > 0` twice over.)
+    assert "Sample Native Document Content" in analysis.text
+    assert analysis.character_count == len(analysis.text.strip())
+    assert analysis.text_density > 0
+    assert analysis.image_count == 0
 
 
 def test_classify_image_page(sample_image_pdf_bytes):
