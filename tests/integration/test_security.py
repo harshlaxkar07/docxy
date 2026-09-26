@@ -105,3 +105,12 @@ def test_upload_leaves_no_temp_file_behind(client, sample_native_pdf_bytes):
 
     after = set(temp_dir.glob("*.pdf")) if temp_dir.exists() else set()
     assert after == before, "a staged upload was left in the temp directory"
+
+
+def test_query_parameter_key_is_accepted(auth_client):
+    """Downloads are plain browser navigations and cannot send a header, so an
+    api_key query parameter is honoured too."""
+    res = auth_client.get("/api/v1/documents?api_key=key-alpha")
+    assert res.status_code == 200
+
+    assert auth_client.get("/api/v1/documents?api_key=nope").status_code == 401

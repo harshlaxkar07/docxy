@@ -5,6 +5,31 @@
    ========================================================================== */
 
 const BASE = "/api/v1";
+const API_KEY_STORAGE = "docxy-api-key";
+
+/* The key lives only in this browser. It is sent on every API call so the UI
+   keeps working when AUTH_ENABLED is switched on. */
+export function getApiKey() {
+  try {
+    return localStorage.getItem(API_KEY_STORAGE) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function setApiKey(key) {
+  try {
+    if (key) localStorage.setItem(API_KEY_STORAGE, key);
+    else localStorage.removeItem(API_KEY_STORAGE);
+  } catch {
+    /* private mode — the key simply is not remembered */
+  }
+}
+
+function authHeaders() {
+  const key = getApiKey();
+  return key ? { "X-API-Key": key } : {};
+}
 
 /** An API failure carrying the service's own error code and request id. */
 export class ApiError extends Error {
@@ -42,7 +67,12 @@ export function hintFor(code) {
 async function request(path, { method = "GET", headers = {}, body = null, signal } = {}) {
   let res;
   try {
-    res = await fetch(`${BASE}${path}`, { method, headers, body, signal });
+    res = await fetch(`${BASE}${path}`, {
+      method,
+      headers: { ...authHeaders(), ...headers },
+      body,
+      signal,
+    });
   } catch (err) {
     if (err.name === "AbortError") throw err;
     throw new ApiError("Could not reach the service. Is it still running?", {
@@ -116,7 +146,7 @@ export const api = {
   /** /health/ready sits outside /api/v1 and is not enveloped. */
   async getReady({ signal } = {}) {
     try {
-      const res = await fetch("/health/ready", { signal });
+      const res = await fetch("/health/ready", { headers: authHeaders(), signal });
       return await res.json();
     } catch (err) {
       if (err.name === "AbortError") throw err;
@@ -125,7 +155,12 @@ export const api = {
   },
 
   downloadUrl(uuid, fileType) {
-    return `${BASE}/documents/${encodeURIComponent(uuid)}/download?file_type=${fileType}`;
+    /* A download is a plain browser navigation and cannot carry a header, so
+       the key travels as a query parameter when one is set. */
+    const q = new URLSearchParams({ file_type: fileType });
+    const key = getApiKey();
+    if (key) q.set("api_key", key);
+    return `${BASE}/documents/${encodeURIComponent(uuid)}/download?${q}`;
   },
 
   /**
@@ -140,6 +175,8 @@ export const api = {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", `${BASE}/documents`);
       if (idempotencyKey) xhr.setRequestHeader("Idempotency-Key", idempotencyKey);
+      const key = getApiKey();
+      if (key) xhr.setRequestHeader("X-API-Key", key);
 
       if (onProgress) {
         xhr.upload.addEventListener("progress", (ev) => {

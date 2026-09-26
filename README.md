@@ -12,7 +12,8 @@ vision model. No Celery, no Redis, no Postgres — just SQLite and one backgroun
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
 [![PyMuPDF](https://img.shields.io/badge/PyMuPDF-1.23%2B-E5322D)](https://pymupdf.readthedocs.io/)
-![Tests](https://img.shields.io/badge/tests-22%20passing-2563EB)
+![Tests](https://img.shields.io/badge/tests-50%20passing-2563EB)
+[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
 
 </div>
 
@@ -90,6 +91,15 @@ python run.py
 
 That's it. No `.env` is required: every setting has a working default.
 
+### Or with Docker
+
+```bash
+docker compose up --build
+```
+
+The image runs as an unprivileged user and keeps the database, stored PDFs,
+extracted text and logs on a single `/data` volume.
+
 | URL                            | What it is                    |
 | ------------------------------ | ----------------------------- |
 | <http://localhost:8000>        | Web UI                        |
@@ -121,6 +131,33 @@ GROQ_MODEL=<a current Groq vision model>
 > **Note:** the shipped `GROQ_MODEL` default (`llama-3.2-11b-vision-preview`) is a
 > retired preview model. Point it at a currently supported vision model before
 > enabling OCR — see [Limitations](#limitations).
+
+## Security
+
+Authentication is **opt-in** so the service still starts with no configuration.
+Turn it on before exposing docxy beyond localhost:
+
+```env
+AUTH_ENABLED=true
+API_KEYS=a-long-random-key,another-for-rotation
+CORS_ALLOW_ORIGINS=https://your-frontend.example.com
+```
+
+Every document, job, settings and storage route then requires the key in an
+`X-API-Key` header (or an `api_key` query parameter, since a download is a
+plain browser navigation and cannot send a header). `/health*` stays open so
+liveness and readiness probes keep working.
+
+It **fails closed**: enabling auth without configuring a key rejects every
+request rather than silently letting them through. The web UI prompts for a key
+on its first 401 and keeps it in that browser only.
+
+CORS credentials are only honoured alongside an explicit origin list —
+`*` with credentials is a combination browsers reject outright, so it is
+resolved away rather than emitted.
+
+Uploads stream to disk in 1 MB chunks and abort the moment they exceed
+`MAX_UPLOAD_SIZE_MB`, so an oversized body is never buffered in memory.
 
 ## Web UI
 
@@ -255,6 +292,10 @@ All endpoints return `{success, data, error}`. Full reference: [`docs/api.md`](d
 | `POST` | `/api/v1/jobs/{id}/retry`              | Retry a failed job                         |
 | `POST` | `/api/v1/jobs/{id}/cancel`             | Cancel an active job                       |
 | `GET`  | `/api/v1/settings`                     | Effective non-secret configuration         |
+| `GET`  | `/api/v1/settings/runtime`             | Tunable settings and their override state  |
+| `PUT`  | `/api/v1/settings/runtime/{key}`       | Override a tunable setting, no restart     |
+| `DELETE` | `/api/v1/settings/runtime/{key}`     | Clear an override                          |
+| `GET`  | `/api/v1/storage/local/{key}`          | Serve a stored object when AWS is disabled |
 | `GET`  | `/health` · `/health/live` · `/health/ready` | Liveness and readiness              |
 
 **Error envelope**
@@ -365,6 +406,30 @@ The ones you are most likely to touch:
 Logs are secret-masked: `gsk_*`, `AKIA*`, bearer tokens and `api_key=…` are redacted
 before anything reaches disk.
 
+## Runtime configuration
+
+Most settings are read once at startup, but an allowlisted set can be retuned
+without a restart. Overrides live in the `settings` table and take precedence
+over the environment:
+
+```bash
+# Raise the native-text threshold on a running service
+curl -X PUT http://localhost:8000/api/v1/settings/runtime/PDF_MIN_TEXT_LENGTH \
+  -H 'Content-Type: application/json' -d '{"value": 350}'
+
+# Inspect every tunable value and whether it is overridden
+curl http://localhost:8000/api/v1/settings/runtime
+
+# Drop the override; the environment value applies again
+curl -X DELETE http://localhost:8000/api/v1/settings/runtime/PDF_MIN_TEXT_LENGTH
+```
+
+Tunable keys: the three classification thresholds, `TXT_INCLUDE_PAGE_MARKERS`,
+`TXT_INCLUDE_METADATA`, `GROQ_ENABLED`, `GROQ_MODEL`,
+`WORKER_POLL_INTERVAL_SECONDS` and `JOB_STALE_TIMEOUT_SECONDS`. Anything
+outside that allowlist is rejected, so a settings write cannot redefine paths
+or credentials.
+
 ## Data model
 
 SQLite via the standard library, opened with `journal_mode=WAL`, `foreign_keys=ON`,
@@ -393,13 +458,17 @@ identically on S3 and on local disk.
 ```
 docxy/
 ├── run.py                     # uvicorn entry point
-├── requirements.txt
+├── Dockerfile                 # multi-stage; runs unprivileged on /data
+├── docker-compose.yml
+├── pyproject.toml             # metadata, deps, pytest config
+├── requirements.txt           # runtime deps (pinned to a major range)
+├── requirements-dev.txt       # + pytest, moto
 ├── tailwind.config.js         # recipe for regenerating the UI stylesheet
 ├── .env.example               # every setting with its default; credentials blank
 ├── app/
 │   ├── main.py                # FastAPI app, lifespan, middleware, error handlers
-│   ├── api/routes/            # documents · jobs · health · settings
-│   ├── core/                  # config, logging, exceptions
+│   ├── api/routes/            # documents · jobs · health · settings · storage
+│   ├── core/                  # config, logging, exceptions, security, runtime settings
 │   ├── constants/             # status enums, error codes, state machine
 │   ├── db/                    # connection, migrations, repositories
 │   ├── schemas/               # pydantic request/response models
@@ -412,6 +481,7 @@ docxy/
 │       ├── fonts/             # self-hosted Inter + JetBrains Mono
 │       └── js/                # api.js · ui.js · app.js
 ├── tests/                     # unit · integration · performance
+├── .github/workflows/ci.yml   # tests on 3.10-3.12 + Docker build
 ├── docs/                      # architecture, api, pipeline, recovery, worker, …
 └── design-system/             # generated UI design system reference
 ```
@@ -419,16 +489,25 @@ docxy/
 ## Testing
 
 ```bash
-# Unit + integration (22 tests)
-python -m pytest tests -q
+pip install -r requirements-dev.txt
+
+# Unit + integration (50 tests)
+pytest -q
 
 # Include the performance benchmark (asserts < 100 ms per page)
-python -m pytest tests tests/performance -q
+pytest tests/performance -q
 ```
 
-Covered: upload validation, SHA-256 dedup, idempotency, page classification, the job
-state machine, atomic claiming, the persistent rate limiter, crash recovery, and a full
-upload → worker → extraction → TXT → download integration run.
+Covered: upload validation and the streaming size cutoff, SHA-256 dedup,
+idempotency, page classification, the job state machine, atomic claiming, the
+persistent rate limiter, crash recovery *including the content of a resumed
+job's output*, API key auth, artifact downloads across a month boundary, the
+vision OCR fallback via an injected fake provider, and S3 mode against a mocked
+bucket (`moto`). A full upload → worker → extraction → TXT → download run ties
+it together.
+
+CI runs the suite on Python 3.10, 3.11 and 3.12, then builds the Docker image
+and waits for the container to report ready.
 
 ## Developing the web UI
 
@@ -444,40 +523,33 @@ The generated file is committed, so running docxy never requires Node.
 
 ## Limitations
 
-Known gaps, stated plainly:
+Stated plainly, so nobody discovers these the hard way:
 
-- **Resumed jobs can produce truncated text.** `document_pages` has no text column, so
-  pages completed before a crash contribute an empty body when the TXT is regenerated.
-  This is the most significant open defect.
-- **The `GROQ_MODEL` default is a retired preview model.** Point it at a current Groq
-  vision model before enabling OCR.
-- **TXT download breaks across month boundaries** — the route recomputes the storage key
-  from `datetime.now()` instead of reading `output_files.s3_key`.
-- **No authentication, authorization or per-client quota** on any endpoint.
-- **Uploads are not streamed** — the whole body is read into memory, so the size limit is
-  enforced only after the file is already in RAM.
-- **CORS ships as `allow_origins=["*"]` with credentials enabled** — fine locally, wrong
-  for anything public.
-- **The OCR path is not covered by tests.** The test suite forces `GROQ_ENABLED=false`
-  and no fake vision provider is injected, so the OCR, retry and usage-recording code is
-  unverified. S3 mode is likewise untested.
-- **Recovery sweeps once at startup**, not on an interval, and heartbeats are bumped per
-  page rather than on a timer — so a single OCR page slower than
-  `JOB_STALE_TIMEOUT_SECONDS` can look stale.
-- **`WORKER_COUNT` is not honored** — exactly one worker starts.
-- **No packaging or deployment story** — no Dockerfile, `pyproject.toml`, lockfile or CI.
-  Dependencies are floor-pinned with `>=`.
+- **Single-process by design.** The queue is one SQLite file and the worker is
+  in-process, so docxy scales with `WORKER_COUNT`, not with replicas. Multiple
+  containers against a shared volume would contend for one write lock.
+- **The OCR path is verified against a fake provider, not the live Groq API.**
+  Provider dispatch, retry, usage recording and the native-text fallback are
+  covered; what a real vision model returns for your scans is not.
+- **`GROQ_MODEL` points at a model that may change.** It now defaults to a
+  current vision model, but Groq retires ids — confirm it against their model
+  list before relying on OCR in production.
+- **Per-request Groq keys are service-wide, not per-request.** A key stored via
+  the runtime settings API applies to every job the worker picks up.
+- **No per-client quota or rate limiting on the API itself.** The vision-API
+  quota is enforced; the HTTP surface is not.
+- **Migrations are additive only.** New columns are applied in place, but there
+  is no versioned history and no downgrade path.
+- **No lockfile.** Dependencies are pinned to a major range, which prevents a
+  breaking upgrade but does not pin exact builds.
 
 ## Roadmap
 
-1. Persist per-page text so resumption produces complete output.
-2. Read `output_files.s3_key` for downloads instead of recomputing the key.
-3. Point `GROQ_MODEL` at a supported model and add the first test that exercises the OCR
-   path with an injected fake provider.
-4. Security baseline — API-key auth on the document and job routers, a real CORS origin
-   list, and streaming uploads with an early size cutoff.
-5. Continuous recovery sweeps and a dedicated heartbeat timer.
-6. Dockerfile, `pyproject.toml` or a lockfile, and CI running `pytest`.
+1. Per-client API quota and request rate limiting.
+2. A lockfile (`pip-tools` or `uv`) for byte-identical installs.
+3. Per-request vision keys, so multi-tenant callers can bring their own.
+4. Optional Postgres backend for deployments that need more than one process.
+5. Structured metrics (Prometheus) alongside the existing `api_usage` table.
 
 ## Documentation
 

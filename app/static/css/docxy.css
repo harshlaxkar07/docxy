@@ -699,3 +699,42 @@ button { font: inherit; color: inherit; }
 @media (min-width: 1024px) {
   .rail-sticky { position: sticky; top: 5.5rem; }
 }
+
+
+/* --- API key gate --------------------------------------------------------
+   Shown only when the service replies 401, i.e. AUTH_ENABLED is on and this
+   browser has no valid key stored. */
+
+.key-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: var(--space-md);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: blur(4px);
+}
+.key-gate[hidden] { display: none; }
+
+.key-card {
+  width: min(28rem, 100%);
+  padding: var(--space-xl);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+
+.key-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.875rem;
+}
+.key-input:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }

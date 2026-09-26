@@ -2,7 +2,7 @@
    app.js — router, polling scheduler and view renderers.
    ========================================================================== */
 
-import { api, ApiError, hintFor } from "./api.js";
+import { api, ApiError, hintFor, getApiKey, setApiKey } from "./api.js";
 import * as U from "./ui.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -32,8 +32,22 @@ function changed(key, value) {
   return true;
 }
 
+/** Show the key gate when the service says the request was unauthorised. */
+function requireKey() {
+  const gate = $("#key-gate");
+  if (!gate || !gate.hidden) return;
+  gate.hidden = false;
+  $("#key-error").textContent = getApiKey() ? "That key was rejected. Try another." : "";
+  $("#key-input").value = "";
+  $("#key-input").focus();
+}
+
 function reportError(err, fallback) {
   if (err && err.name === "AbortError") return;
+  if (err instanceof ApiError && (err.status === 401 || err.code === "UNAUTHORIZED")) {
+    requireKey();
+    return;
+  }
   const isApi = err instanceof ApiError;
   const message = isApi ? err.message : fallback || "Something went wrong.";
   const hint = isApi ? hintFor(err.code) : null;
@@ -837,7 +851,12 @@ async function navigate() {
 
   window.scrollTo({ top: 0, behavior: "instant" in window ? "instant" : "auto" });
 
-  await refreshRoute();
+  try {
+    await refreshRoute();
+  } catch {
+    /* Already surfaced by reportError (or the key gate); a failed first load
+       must not leave an unhandled rejection behind. */
+  }
   schedulePoll();
 }
 
@@ -1026,6 +1045,29 @@ function wireDelegates() {
   });
 
   $("#refresh-health").addEventListener("click", loadHealth);
+
+  $("#key-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const value = $("#key-input").value.trim();
+    if (!value) return;
+
+    setApiKey(value);
+    try {
+      /* Verify before dismissing, so a bad key does not silently persist. */
+      await api.listDocuments({ limit: 1 });
+      $("#key-gate").hidden = true;
+      U.toast("API key accepted.", { kind: "ok" });
+      await refreshRoute();
+      schedulePoll();
+    } catch (err) {
+      setApiKey("");
+      $("#key-error").textContent =
+        err instanceof ApiError && err.status === 401
+          ? "That key was rejected. Try another."
+          : "Could not verify the key. Is the service reachable?";
+      $("#key-input").focus();
+    }
+  });
 
   $("#theme-toggle").addEventListener("click", () =>
     applyTheme(!document.documentElement.classList.contains("dark"))

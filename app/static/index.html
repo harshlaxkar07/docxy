@@ -200,6 +200,21 @@
   </div>
 </footer>
 
+<div id="key-gate" class="key-gate" role="dialog" aria-modal="true" aria-labelledby="key-gate-title" hidden>
+  <form class="key-card" id="key-form">
+    <h2 id="key-gate-title" class="text-xl">API key required</h2>
+    <p class="mt-2 text-[0.875rem]" style="color: var(--muted-fg)">
+      This service has authentication enabled. Enter a key from its
+      <code class="mono">API_KEYS</code> setting to continue. It is stored in this browser only.
+    </p>
+    <label class="label block mt-5" for="key-input">API key</label>
+    <input class="key-input mt-2" id="key-input" type="password" autocomplete="off"
+           spellcheck="false" required aria-describedby="key-error">
+    <p id="key-error" class="mt-2 text-[0.8125rem]" style="color: var(--danger)" role="alert"></p>
+    <button class="btn w-full mt-4" type="submit">Continue</button>
+  </form>
+</div>
+
 <div id="toasts" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
 
 <script type="module" src="/js/app.js"></script>

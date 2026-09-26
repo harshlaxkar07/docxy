@@ -8,7 +8,7 @@ key from `API_KEYS` in the `X-API-Key` header.
 import secrets
 from typing import Optional
 
-from fastapi import Header
+from fastapi import Header, Query
 
 from app.core.config import settings
 from app.constants.errors import ErrorCode
@@ -33,8 +33,14 @@ class AuthMisconfiguredError(AppException):
         )
 
 
-def require_api_key(x_api_key: Optional[str] = Header(None, alias="X-API-Key")) -> None:
+def require_api_key(
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    api_key: Optional[str] = Query(None, description="API key, for links that cannot send a header"),
+) -> None:
     """FastAPI dependency guarding a router.
+
+    The header is the normal path. A query parameter is also accepted because a
+    download is a plain browser navigation and cannot carry a custom header.
 
     Fails closed: enabling auth without configuring any key rejects every
     request rather than silently letting them through.
@@ -46,9 +52,10 @@ def require_api_key(x_api_key: Optional[str] = Header(None, alias="X-API-Key")) 
     if not valid_keys:
         raise AuthMisconfiguredError()
 
-    if not x_api_key:
+    presented = x_api_key or api_key
+    if not presented:
         raise UnauthorizedError("Missing API key")
 
     # Constant-time comparison so a wrong key cannot be discovered by timing.
-    if not any(secrets.compare_digest(x_api_key, key) for key in valid_keys):
+    if not any(secrets.compare_digest(presented, key) for key in valid_keys):
         raise UnauthorizedError("Invalid API key")
