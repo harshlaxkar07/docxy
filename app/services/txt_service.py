@@ -1,5 +1,6 @@
 from typing import Optional
 from app.core.config import settings
+from app.core import runtime_settings
 from app.utils.hashing import compute_sha256
 
 
@@ -15,8 +16,8 @@ class TXTService:
         Aggregate sorted page records into a final formatted string.
         Returns (formatted_text, character_count, word_count, sha256_hash).
         """
-        use_markers = include_markers if include_markers is not None else settings.TXT_INCLUDE_PAGE_MARKERS
-        use_meta = include_metadata if include_metadata is not None else settings.TXT_INCLUDE_METADATA
+        use_markers = include_markers if include_markers is not None else runtime_settings.get("TXT_INCLUDE_PAGE_MARKERS")
+        use_meta = include_metadata if include_metadata is not None else runtime_settings.get("TXT_INCLUDE_METADATA")
 
         rule = "=" * 60
 

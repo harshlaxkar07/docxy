@@ -5,6 +5,7 @@ from PIL import Image
 import fitz  # PyMuPDF
 
 from app.core.config import settings
+from app.core import runtime_settings
 from app.constants.statuses import PageType
 from app.core.exceptions import (
     PDFValidationError,
@@ -108,16 +109,16 @@ class PDFService:
         # Classification heuristics
         if char_count == 0 and image_count == 0:
             page_type = PageType.EMPTY
-        elif char_count >= settings.PDF_MIN_TEXT_LENGTH:
-            if image_count > 0 and image_area_ratio >= settings.PDF_MIN_IMAGE_AREA_RATIO:
+        elif char_count >= runtime_settings.get("PDF_MIN_TEXT_LENGTH"):
+            if image_count > 0 and image_area_ratio >= runtime_settings.get("PDF_MIN_IMAGE_AREA_RATIO"):
                 page_type = PageType.MIXED
             else:
                 page_type = PageType.NATIVE_TEXT
         else:
             # Low text count (< threshold)
-            if image_count > 0 or image_area_ratio >= settings.PDF_MIN_IMAGE_AREA_RATIO:
+            if image_count > 0 or image_area_ratio >= runtime_settings.get("PDF_MIN_IMAGE_AREA_RATIO"):
                 page_type = PageType.IMAGE_BASED
-            elif text_density < settings.PDF_MIN_TEXT_DENSITY:
+            elif text_density < runtime_settings.get("PDF_MIN_TEXT_DENSITY"):
                 page_type = PageType.IMAGE_BASED if image_count > 0 else PageType.EMPTY
             else:
                 page_type = PageType.NATIVE_TEXT

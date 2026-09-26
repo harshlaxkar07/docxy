@@ -26,3 +26,20 @@ class SafeSettingsResponse(BaseModel):
     job_stale_timeout_seconds: float
     txt_include_page_markers: bool
     txt_include_metadata: bool
+
+
+class RuntimeSettingValue(BaseModel):
+    """One tunable setting: its effective value and whether it is overridden."""
+
+    key: str
+    value: Optional[object] = None
+    value_type: str
+    overridden: bool = False
+
+
+class RuntimeSettingsResponse(BaseModel):
+    items: list[RuntimeSettingValue]
+
+
+class RuntimeSettingUpdate(BaseModel):
+    value: object
