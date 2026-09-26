@@ -32,6 +32,11 @@ class ErrorCode(str, Enum):
     OCR_DISABLED = "OCR_DISABLED"
     OCR_FAILED = "OCR_FAILED"
 
+    # Auth Errors
+    UNAUTHORIZED = "UNAUTHORIZED"
+    FORBIDDEN = "FORBIDDEN"
+    PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE"
+
     # Generic & System Errors
     DATABASE_ERROR = "DATABASE_ERROR"
     NOT_FOUND = "NOT_FOUND"

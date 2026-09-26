@@ -27,6 +27,17 @@ class Settings(BaseSettings):
     TEMP_DIR: str = "./data/temp"
     LOCAL_STORAGE_DIR: str = "./data/output"
 
+    # Security
+    # Auth is opt-in so the service still starts with no configuration. Turn it
+    # on and set API_KEYS before exposing this beyond localhost.
+    AUTH_ENABLED: bool = False
+    API_KEYS: str = ""
+    API_KEY_HEADER: str = "X-API-Key"
+    # Comma-separated origins, or "*" for any. Credentials are only permitted
+    # when an explicit list is given: browsers reject "*" plus credentials.
+    CORS_ALLOW_ORIGINS: str = "*"
+    CORS_ALLOW_CREDENTIALS: bool = False
+
     # Processing Limits & Validation
     MAX_UPLOAD_SIZE_MB: int = 100
     MAX_PAGES_PER_DOCUMENT: int = 1000
@@ -45,7 +56,9 @@ class Settings(BaseSettings):
     # Groq Vision Provider Configuration
     GROQ_ENABLED: bool = False
     GROQ_API_KEY: Optional[str] = None
-    GROQ_MODEL: str = "llama-3.2-11b-vision-preview"
+    # Vision-capable Groq model. The old llama-3.2-*-vision-preview ids were
+    # retired; a retired id fails with model_not_found at call time.
+    GROQ_MODEL: str = "meta-llama/llama-4-scout-17b-16e-instruct"
     GROQ_REQUESTS_PER_SECOND: int = 1
     GROQ_REQUESTS_PER_MINUTE: int = 20
     GROQ_REQUESTS_PER_HOUR: int = 500
@@ -61,6 +74,9 @@ class Settings(BaseSettings):
     WORKER_HEARTBEAT_INTERVAL_SECONDS: float = 10.0
     JOB_STALE_TIMEOUT_SECONDS: float = 120.0
     JOB_MAX_ATTEMPTS: int = 3
+    # How often the pool re-sweeps for stale jobs while running. A sweep only
+    # at startup leaves a job orphaned mid-run stuck until the next restart.
+    RECOVERY_SWEEP_INTERVAL_SECONDS: float = 60.0
 
     # Output Configuration
     TXT_INCLUDE_PAGE_MARKERS: bool = True
@@ -73,6 +89,20 @@ class Settings(BaseSettings):
     @property
     def max_upload_size_bytes(self) -> int:
         return self.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+
+    @property
+    def api_key_set(self) -> set[str]:
+        """Accepted API keys, parsed from the comma-separated API_KEYS value."""
+        return {k.strip() for k in self.API_KEYS.split(",") if k.strip()}
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [o.strip() for o in self.CORS_ALLOW_ORIGINS.split(",") if o.strip()] or ["*"]
+
+    @property
+    def cors_allow_credentials(self) -> bool:
+        """Credentials cannot be combined with a wildcard origin."""
+        return self.CORS_ALLOW_CREDENTIALS and "*" not in self.cors_origins
 
     def ensure_directories(self) -> None:
         """Ensure runtime directories exist."""

@@ -36,7 +36,7 @@ def readiness():
         is_ready = False
 
     # 2. Worker Check
-    checks["worker"] = "running" if worker._running else "stopped"
+    checks["worker"] = "running" if worker.is_running else "stopped"
 
     # 3. Storage Mode
     checks["storage"] = "s3" if settings.AWS_ENABLED else "local"

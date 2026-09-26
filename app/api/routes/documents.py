@@ -1,3 +1,5 @@
+import os
+import tempfile
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Header, Query, HTTPException, status
@@ -17,8 +19,12 @@ from app.schemas.document import (
 from app.services.document_service import document_service
 from app.services.s3_service import s3_service
 from app.core.config import settings
+from app.core.exceptions import PDFTooLargeError
 
 router = APIRouter(prefix="/api/v1/documents", tags=["Documents"])
+
+
+UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 @router.post("", response_model=ApiResponse[DocumentUploadResponse], status_code=status.HTTP_202_ACCEPTED)
@@ -27,13 +33,32 @@ async def upload_document(
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ):
     """Upload a PDF document. Returns immediately with document_id and job_id for background processing."""
-    file_bytes = await file.read()
-    result = document_service.process_upload(
-        file_bytes=file_bytes,
-        original_filename=file.filename or "uploaded.pdf",
-        content_type=file.content_type,
-        idempotency_key=idempotency_key,
-    )
+    # The body is streamed to disk a chunk at a time and aborted the moment it
+    # exceeds the limit, so an oversized upload never accumulates in memory.
+    max_bytes = settings.max_upload_size_bytes
+    Path(settings.TEMP_DIR).mkdir(parents=True, exist_ok=True)
+
+    fd, tmp_name = tempfile.mkstemp(suffix=".pdf", dir=settings.TEMP_DIR)
+    tmp_path = Path(tmp_name)
+    received = 0
+    try:
+        with os.fdopen(fd, "wb") as staged:
+            while chunk := await file.read(UPLOAD_CHUNK_BYTES):
+                received += len(chunk)
+                if received > max_bytes:
+                    raise PDFTooLargeError(
+                        f"Upload exceeds the {settings.MAX_UPLOAD_SIZE_MB} MB limit"
+                    )
+                staged.write(chunk)
+
+        result = document_service.process_upload(
+            file_path=tmp_path,
+            original_filename=file.filename or "uploaded.pdf",
+            content_type=file.content_type,
+            idempotency_key=idempotency_key,
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
     return ApiResponse(
         success=True,
         data=DocumentUploadResponse(
@@ -122,38 +147,59 @@ def download_document(
 ):
     """Download the original PDF or generated extracted TXT file."""
     doc = document_service.get_document_by_uuid(document_id)
-    doc_uuid = doc["uuid"]
 
     if file_type == "pdf":
-        if doc.get("s3_key") and settings.AWS_ENABLED:
-            presigned = s3_service.generate_presigned_url(doc["s3_key"])
-            return RedirectResponse(url=presigned)
-        else:
-            local_path = Path(settings.LOCAL_STORAGE_DIR) / doc["stored_filename"]
-            if not local_path.exists():
-                raise HTTPException(status_code=404, detail="Original PDF file not found on disk")
-            return FileResponse(
-                path=str(local_path),
-                filename=doc["original_filename"],
-                media_type="application/pdf",
-            )
-    else:
-        # Extracted TXT
-        txt_s3_key = s3_service.generate_canonical_key("extracted", doc_uuid, "extracted.txt")
-        if settings.AWS_ENABLED:
-            presigned = s3_service.generate_presigned_url(txt_s3_key)
-            return RedirectResponse(url=presigned)
-        else:
-            local_txt_path = Path(settings.LOCAL_STORAGE_DIR) / txt_s3_key
-            if not local_txt_path.exists():
-                # Fallback check for flat filename
-                alt_path = Path(settings.LOCAL_STORAGE_DIR) / f"{Path(doc['original_filename']).stem}_extracted.txt"
-                if alt_path.exists():
-                    local_txt_path = alt_path
-                else:
-                    raise HTTPException(status_code=404, detail="Extracted text file not yet generated or not found")
-            return FileResponse(
-                path=str(local_txt_path),
-                filename=f"{Path(doc['original_filename']).stem}_extracted.txt",
-                media_type="text/plain; charset=utf-8",
-            )
+        return _serve_artifact(
+            doc=doc,
+            file_type="ORIGINAL_PDF",
+            stored_key=doc.get("s3_key"),
+            local_fallbacks=[Path(settings.LOCAL_STORAGE_DIR) / doc["stored_filename"]],
+            download_name=doc["original_filename"],
+            media_type="application/pdf",
+            missing_detail="Original PDF file not found in storage",
+        )
+
+    return _serve_artifact(
+        doc=doc,
+        file_type="EXTRACTED_TXT",
+        stored_key=None,
+        local_fallbacks=[],
+        download_name=f"{Path(doc['original_filename']).stem}_extracted.txt",
+        media_type="text/plain; charset=utf-8",
+        missing_detail="Extracted text file not yet generated",
+    )
+
+
+def _serve_artifact(
+    doc: dict,
+    file_type: str,
+    stored_key: Optional[str],
+    local_fallbacks: list[Path],
+    download_name: str,
+    media_type: str,
+    missing_detail: str,
+):
+    """Resolve an artifact by the key recorded when it was written.
+
+    The key comes from output_files rather than being rebuilt from today's
+    date — a recomputed `extracted/YYYY/MM/...` key silently misses every file
+    written in an earlier month.
+    """
+    record = document_service.get_output_file(doc["uuid"], file_type)
+    key = (record or {}).get("s3_key") or stored_key
+
+    if settings.AWS_ENABLED:
+        if not key:
+            raise HTTPException(status_code=404, detail=missing_detail)
+        return RedirectResponse(url=s3_service.generate_presigned_url(key))
+
+    candidates = []
+    if key:
+        candidates.append(Path(settings.LOCAL_STORAGE_DIR) / key)
+    candidates.extend(local_fallbacks)
+
+    for path in candidates:
+        if path.exists():
+            return FileResponse(path=str(path), filename=download_name, media_type=media_type)
+
+    raise HTTPException(status_code=404, detail=missing_detail)

@@ -89,6 +89,9 @@ CREATE TABLE IF NOT EXISTS document_pages (
     ocr_attempt INTEGER DEFAULT 0,
     processing_time_ms INTEGER DEFAULT 0,
     text_character_count INTEGER DEFAULT 0,
+    -- The page's own extracted text. Without this, a job resumed after a crash
+    -- re-reads already-DONE pages as empty and regenerates a truncated TXT.
+    text TEXT,
     status TEXT NOT NULL DEFAULT 'PENDING',
     error_code TEXT,
     error_message TEXT,
@@ -196,12 +199,37 @@ CREATE TABLE IF NOT EXISTS settings (
 """
 
 
+# Columns added after the initial schema. CREATE TABLE IF NOT EXISTS will not
+# add a column to a table that already exists, so each one is applied
+# separately and skipped when already present.
+ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
+    ("document_pages", "text", "TEXT"),
+]
+
+
+def _apply_additive_columns(conn: sqlite3.Connection) -> None:
+    """Add post-initial-schema columns to databases created before them."""
+    for table, column, decl in ADDITIVE_COLUMNS:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(f"PRAGMA table_info({table});")
+            existing = {row[1] for row in cursor.fetchall()}
+            if not existing or column in existing:
+                continue
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl};")
+            logger.info("Added column %s.%s", table, column)
+        finally:
+            cursor.close()
+
+
 def run_migrations(target_db: Optional[sqlite3.Connection] = None) -> None:
     """Execute SQLite schema migrations idempotently."""
     logger.info("Running database migrations...")
     if target_db:
         target_db.executescript(MIGRATION_SQL)
+        _apply_additive_columns(target_db)
     else:
         with db.connection() as conn:
             conn.executescript(MIGRATION_SQL)
+            _apply_additive_columns(conn)
     logger.info("Database migrations completed successfully.")

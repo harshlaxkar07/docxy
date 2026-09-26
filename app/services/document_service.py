@@ -40,14 +40,26 @@ class DocumentService:
 
     def process_upload(
         self,
-        file_bytes: bytes,
-        original_filename: str,
+        file_bytes: Optional[bytes] = None,
+        original_filename: str = "",
         content_type: Optional[str] = None,
         idempotency_key: Optional[str] = None,
+        file_path: Optional[Path] = None,
     ) -> dict:
-        """Validate, deduplicate, persist, and queue a new PDF document."""
+        """Validate, deduplicate, persist, and queue a new PDF document.
+
+        Accepts either the raw bytes or a path to an already-staged file. The
+        HTTP route streams to a temp file and passes `file_path`, so a large
+        upload is never held in memory; `file_bytes` remains for direct calls.
+        """
+        if file_path is None and file_bytes is None:
+            raise PDFValidationError("No file content supplied")
+
+        # `source` is what the hasher and PyMuPDF read — a path or the bytes.
+        source: Union[Path, bytes] = file_path if file_path is not None else file_bytes
+
         # 1. Size Validation
-        file_size = len(file_bytes)
+        file_size = file_path.stat().st_size if file_path is not None else len(file_bytes)
         if file_size == 0:
             raise PDFValidationError("Uploaded file is empty")
         if file_size > settings.max_upload_size_bytes:
@@ -61,15 +73,20 @@ class DocumentService:
         if ext != "pdf":
             raise PDFValidationError(f"Invalid file extension '.{ext}'. Only PDF files are supported.")
 
-        if not is_pdf_header(file_bytes[:10]):
+        if file_path is not None:
+            with open(file_path, "rb") as fh:
+                header = fh.read(10)
+        else:
+            header = file_bytes[:10]
+        if not is_pdf_header(header):
             raise PDFValidationError("File does not start with valid PDF binary signature (%PDF-)")
 
         # 3. PDF Structural Validation (PyMuPDF)
-        pdf_info = pdf_service.validate_pdf(file_bytes)
+        pdf_info = pdf_service.validate_pdf(source)
         page_count = pdf_info["page_count"]
 
         # 4. Hash Calculation & Duplicate Detection
-        file_hash = compute_sha256(file_bytes)
+        file_hash = compute_sha256(source)
         existing_doc = self.doc_repo.get_by_hash(file_hash)
         if existing_doc and existing_doc["status"] == DocumentStatus.COMPLETED.value:
             existing_job = self.job_repo.get_by_document_id(existing_doc["id"])
@@ -115,7 +132,10 @@ class DocumentService:
         storage_dir = Path(settings.LOCAL_STORAGE_DIR)
         storage_dir.mkdir(parents=True, exist_ok=True)
         local_stored_path = storage_dir / stored_filename
-        local_stored_path.write_bytes(file_bytes)
+        if file_path is not None:
+            shutil.copyfile(file_path, local_stored_path)
+        else:
+            local_stored_path.write_bytes(file_bytes)
 
         s3_bucket = None
         s3_key = None
@@ -125,48 +145,58 @@ class DocumentService:
         if settings.AWS_ENABLED:
             try:
                 s3_key = s3_service.generate_canonical_key("documents", doc_uuid, "original.pdf")
-                upload_res = s3_service.upload_file(file_bytes, s3_key, content_type="application/pdf")
+                upload_res = s3_service.upload_file(source, s3_key, content_type="application/pdf")
                 storage_provider = upload_res["storage_provider"]
                 s3_bucket = upload_res["s3_bucket"]
                 s3_url = upload_res["s3_url"]
             except Exception as e:
                 logger.warning("Initial S3 upload deferred to worker: %s", e)
 
-        # 7. Atomic DB Transaction for Document & Job
-        with db.transaction() as conn:
-            doc_record = self.doc_repo.create(
-                {
-                    "uuid": doc_uuid,
-                    "original_filename": clean_filename,
-                    "stored_filename": stored_filename,
-                    "file_extension": ext,
-                    "mime_type": "application/pdf",
-                    "file_size_bytes": file_size,
-                    "file_hash": file_hash,
-                    "page_count": page_count,
-                    "status": DocumentStatus.UPLOADED.value,
-                    "storage_provider": storage_provider,
-                    "s3_bucket": s3_bucket,
-                    "s3_key": s3_key,
-                    "s3_url": s3_url,
-                },
-                conn=conn,
-            )
+        # 7. Atomic DB Transaction for Document & Job.
+        # The file is already on disk at this point, so a failed insert would
+        # strand it. Any failure here removes what was written.
+        try:
+            with db.transaction() as conn:
+                doc_record = self.doc_repo.create(
+                    {
+                        "uuid": doc_uuid,
+                        "original_filename": clean_filename,
+                        "stored_filename": stored_filename,
+                        "file_extension": ext,
+                        "mime_type": "application/pdf",
+                        "file_size_bytes": file_size,
+                        "file_hash": file_hash,
+                        "page_count": page_count,
+                        "status": DocumentStatus.UPLOADED.value,
+                        "storage_provider": storage_provider,
+                        "s3_bucket": s3_bucket,
+                        "s3_key": s3_key,
+                        "s3_url": s3_url,
+                    },
+                    conn=conn,
+                )
 
-            job_record = self.job_repo.create(
-
-                {
-                    "job_uuid": job_uuid,
-                    "document_id": doc_record["id"],
-                    "job_type": "PDF_EXTRACTION",
-                    "status": JobStatus.QUEUED.value,
-                    "stage": JobStage.VALIDATION.value,
-                    "priority": 0,
-                    "total_pages": page_count,
-                    "idempotency_key": idempotency_key,
-                },
-                conn=conn,
-            )
+                job_record = self.job_repo.create(
+                    {
+                        "job_uuid": job_uuid,
+                        "document_id": doc_record["id"],
+                        "job_type": "PDF_EXTRACTION",
+                        "status": JobStatus.QUEUED.value,
+                        "stage": JobStage.VALIDATION.value,
+                        "priority": 0,
+                        "total_pages": page_count,
+                        "idempotency_key": idempotency_key,
+                    },
+                    conn=conn,
+                )
+        except Exception:
+            # Roll the filesystem back so a failed insert leaves nothing behind.
+            try:
+                local_stored_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Could not remove orphaned upload at %s", local_stored_path)
+            logger.error("Persisting document %s failed; removed staged file", doc_uuid)
+            raise
 
         logger.info("Created document %s and queued job %s", doc_uuid, job_uuid)
         return {
@@ -290,6 +320,11 @@ class DocumentService:
             "limit": limit,
             "offset": offset,
         }
+
+    def get_output_file(self, doc_uuid: str, file_type: str) -> Optional[dict]:
+        """The recorded artifact row for a document, or None if never written."""
+        doc = self.get_document_by_uuid(doc_uuid)
+        return self.result_repo.get_output_file_by_type(doc["id"], file_type)
 
     def get_extracted_text_by_uuid(self, doc_uuid: str) -> dict:
         doc = self.get_document_by_uuid(doc_uuid)

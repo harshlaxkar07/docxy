@@ -90,10 +90,12 @@ class ExtractionService:
         if heartbeat_callback:
             heartbeat_callback()
 
-        # Check if already completed (resumability checkpoint)
+        # Check if already completed (resumability checkpoint).
+        # The stored text is returned with it — handing back a record without
+        # "text" makes a resumed job regenerate the TXT with this page blank.
         if page_record and page_record["status"] == PageStatus.DONE.value:
-            logger.info("Page %d for doc %d already DONE, skipping", page_number, doc_id)
-            return page_record
+            logger.info("Page %d for doc %d already DONE, reusing stored text", page_number, doc_id)
+            return {**page_record, "text": page_record.get("text") or ""}
 
         self.page_repo.update_page_result(
             doc_id, page_number, {"status": PageStatus.PROCESSING.value}
@@ -171,6 +173,9 @@ class ExtractionService:
                 "has_text": char_count > 0,
                 "text_length": char_count,
                 "text_character_count": char_count,
+                # Persisted so a job resumed after a crash can reproduce this
+                # page instead of contributing an empty body to the TXT.
+                "text": extracted_text,
                 "text_density": char_count / (analysis.width * analysis.height) if (analysis.width * analysis.height) > 0 else 0,
                 "page_type": page_type.value,
                 "extraction_method": method_used,

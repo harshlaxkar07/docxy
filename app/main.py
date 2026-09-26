@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, Request, status
+from fastapi import Depends, FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
@@ -13,6 +13,7 @@ from fastapi.exceptions import RequestValidationError
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
 from app.core.exceptions import AppException
+from app.core.security import require_api_key
 from app.constants.errors import ErrorCode
 from app.schemas.common import ApiErrorResponse, ErrorDetail
 from app.db.migrations import run_migrations
@@ -22,6 +23,7 @@ from app.api.routes.health import router as health_router
 from app.api.routes.documents import router as documents_router
 from app.api.routes.jobs import router as jobs_router
 from app.api.routes.settings import router as settings_router
+from app.api.routes.storage import router as storage_router
 
 logger = get_logger(__name__)
 
@@ -36,6 +38,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     if settings.WORKER_ENABLED:
         worker.start()
+        worker.install_signal_handlers()
 
     yield
 
@@ -53,13 +56,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS Middleware
+# CORS Middleware.
+# "*" with allow_credentials=True is rejected outright by browsers, so
+# credentials are only enabled when an explicit origin list is configured.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=settings.cors_origins,
+    allow_credentials=settings.cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID", "X-Response-Time-Ms"],
 )
 
 
@@ -141,10 +147,16 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
 
 # Include Routers
+# Health stays open so liveness/readiness probes work without credentials.
 app.include_router(health_router)
-app.include_router(documents_router)
-app.include_router(jobs_router)
-app.include_router(settings_router)
+
+# Everything touching documents or configuration is guarded. The dependency is
+# a no-op while AUTH_ENABLED is false.
+_protected = [Depends(require_api_key)]
+app.include_router(documents_router, dependencies=_protected)
+app.include_router(jobs_router, dependencies=_protected)
+app.include_router(settings_router, dependencies=_protected)
+app.include_router(storage_router, dependencies=_protected)
 
 # Web UI — mounted last so every API route above keeps precedence over the
 # catch-all static mount. html=True serves index.html for "/".

@@ -110,6 +110,28 @@ class ResultRepository:
         cursor.close()
         return dict(row) if row else None
 
+    def get_output_file_by_type(
+        self,
+        document_id: int,
+        file_type: str,
+        conn: Optional[sqlite3.Connection] = None,
+    ) -> Optional[dict]:
+        """Most recent artifact of a given type, e.g. EXTRACTED_TXT.
+
+        Downloads must resolve the key that was actually written rather than
+        recomputing a date-partitioned one, which would miss the file as soon
+        as the month rolls over.
+        """
+        c = conn or self._get_conn()
+        cursor = c.cursor()
+        cursor.execute(
+            "SELECT * FROM output_files WHERE document_id = ? AND file_type = ? ORDER BY id DESC LIMIT 1;",
+            (document_id, file_type),
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        return dict(row) if row else None
+
     def get_output_files(self, document_id: int, conn: Optional[sqlite3.Connection] = None) -> list[dict]:
         c = conn or self._get_conn()
         cursor = c.cursor()
