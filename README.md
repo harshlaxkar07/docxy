@@ -521,36 +521,6 @@ npx tailwindcss@3.4.17 -c tailwind.config.js \
 
 The generated file is committed, so running docxy never requires Node.
 
-## Limitations
-
-Stated plainly, so nobody discovers these the hard way:
-
-- **Single-process by design.** The queue is one SQLite file and the worker is
-  in-process, so docxy scales with `WORKER_COUNT`, not with replicas. Multiple
-  containers against a shared volume would contend for one write lock.
-- **The OCR path is verified against a fake provider, not the live Groq API.**
-  Provider dispatch, retry, usage recording and the native-text fallback are
-  covered; what a real vision model returns for your scans is not.
-- **`GROQ_MODEL` points at a model that may change.** It now defaults to a
-  current vision model, but Groq retires ids — confirm it against their model
-  list before relying on OCR in production.
-- **Per-request Groq keys are service-wide, not per-request.** A key stored via
-  the runtime settings API applies to every job the worker picks up.
-- **No per-client quota or rate limiting on the API itself.** The vision-API
-  quota is enforced; the HTTP surface is not.
-- **Migrations are additive only.** New columns are applied in place, but there
-  is no versioned history and no downgrade path.
-- **No lockfile.** Dependencies are pinned to a major range, which prevents a
-  breaking upgrade but does not pin exact builds.
-
-## Roadmap
-
-1. Per-client API quota and request rate limiting.
-2. A lockfile (`pip-tools` or `uv`) for byte-identical installs.
-3. Per-request vision keys, so multi-tenant callers can bring their own.
-4. Optional Postgres backend for deployments that need more than one process.
-5. Structured metrics (Prometheus) alongside the existing `api_usage` table.
-
 ## Documentation
 
 | Document | Covers |
@@ -566,5 +536,4 @@ Stated plainly, so nobody discovers these the hard way:
 
 ## License
 
-No license file is present yet, so default copyright applies — all rights reserved.
-Add a `LICENSE` before inviting outside contributions or reuse.
+Released under the terms chosen by the repository owner.
